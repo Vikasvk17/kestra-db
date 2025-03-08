@@ -1,0 +1,56 @@
+id: PUR_VALIDATION_DATA_ETL_PIPELINE
+
+namespace:  rdss.component_removal
+ 
+inputs:
+
+  - id: operator
+
+    type: STRING
+
+    defaults: 'JZA'
+ 
+tasks:    
+
+  - id: python
+
+    type: "io.kestra.plugin.scripts.python.Script"
+
+    # beforeCommands:
+
+    #       - pip install numpy==1.26.4
+
+    taskRunner:
+
+        type: io.kestra.plugin.core.runner.Process
+
+    env:
+
+      KESTRA_INPUT_USER: "{{ inputs.operator }}"
+
+    script: |        
+
+      import oracledb
+
+      oracledb.init_oracle_client(lib_dir="/opt/instantclient_19_26")      
+
+      from sqlalchemy import text, create_engine
+
+      import requests, logging, traceback
+
+      import pandas as pd
+
+      import pysolr, json
+
+      from datetime import timedelta
+
+      import time, urllib, json
+
+      import numpy as np
+
+      # import mariadb
+
+      from tqdm import tqdm
+
+      import os
+ 
