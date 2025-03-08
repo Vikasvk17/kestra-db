@@ -1,0 +1,517 @@
+id: PUR_ETL_PIPELINE
+namespace:  rdss.component_removal
+inputs:
+  - id: operator
+    type: STRING
+    defaults: 'JZA'
+
+
+tasks:    
+  - id: python
+    type: "io.kestra.plugin.scripts.python.Script"
+    # beforeCommands:
+    #       - pip install numpy==1.26.2
+    env:
+      KESTRA_INPUT_USER: "{{ inputs.operator }}"
+    taskRunner:
+        type: io.kestra.plugin.core.runner.Process
+        # beforeCommands:
+        #   - pip install --upgrade pip
+        #   - pip install oracledb
+    script: |        
+      import oracledb
+      oracledb.init_oracle_client(lib_dir="/opt/instantclient_19_26")      
+      from sqlalchemy import text, create_engine
+      import requests, logging, traceback
+      import pandas as pd
+      import pysolr, json
+      from datetime import timedelta
+      import time, urllib, json
+      import numpy as np
+      import os
+      # import mariadb
+      from tqdm import tqdm
+      # Run for which Sources
+      run_data_type = ['PUR']
+      import os
+
+        # Read 'user' from environment variables
+      operator = os.getenv("KESTRA_INPUT_USER", "JZA")
+
+
+      # In[4]:
+
+
+      # Master Details
+
+      opr_code = operator
+      ac_model='D8'
+
+
+      master_key_pur = 'PUR'
+      master_key_pur_training_data = 'PUR_TRAINING_INPUT'
+      master_key_pur_validation_data = 'PUR_VALIDATION_DATA'
+      master_key_raw_cr = 'RAW_CR'
+
+      # Maria DB Details
+      mariadb_details =  { "db_host":"10.1.0.16", "db_port": "3300", "db_user":"dev_user", "db_password":"password", "db_table": "component_removal_data" }
+      # mariadb_details = { "db_host":"atpimagine.cl1h6yndkmxj.ca-central-1.rds.amazonaws.com", "db_port": "3306", "db_user":"reliability-dbuser", "db_password":urllib.parse.quote_plus("APy1Sh@PN57dK"), "db_table": "component_removal_data_dummy"}
+
+      if mariadb_details['db_port'] == '3300':
+          mariadb_details['db_name'] = "test_db_1"
+          # mariadb_dest_db = "local_db_etl_dst"
+      else:
+          # mariadb_dest_db = "reliability_stage"
+          mariadb_details['db_name'] = "reliability_stage"
+      source_db_details = {
+        master_key_pur: {
+              "db_host": "35.182.146.227",
+              "db_port": "3306",
+              "db_user": "java_dev",
+              "db_password": "password",
+              "db_name": "test_JZA_DH8_dev",
+              "db_table": "removal_data",
+              "dbtype": "mysql",
+              "opr_code":opr_code,
+              "ac_model":ac_model
+          },
+        master_key_pur_training_data: {
+              "db_host": "35.182.146.227",
+              "db_port": "3306",
+              "db_user": "veryon",
+              "db_password": "password",
+              "db_name": "QUXKQt2FdW",
+              "db_table": "pur_final_data",
+              "dbtype": "mysql",
+              "opr_code":opr_code,
+              "ac_model":ac_model
+          },
+          master_key_raw_cr: {
+              "db_host": "35.182.177.197",
+              "db_port": "1521",
+              "db_user": "rcmolapaws",
+              "db_password": "password",
+              "db_name": "ORCL",
+              "db_table": 'RAW_CR',
+              "dbtype": "oracle",
+              "opr_code":opr_code,
+              "ac_model":ac_model
+          },
+          master_key_pur_validation_data: {
+              "db_host": "35.182.146.227",
+              "db_port": "3306",
+              "db_user": "java_dev",
+              "db_password": "password",
+              "db_name": "test_JZA_DH8_dev",
+              "db_table": "validation_data",
+              "dbtype": "mysql",
+              "opr_code":opr_code,
+              "ac_model":ac_model
+          },
+      }
+      fetch_queries= {
+        master_key_pur: {
+              "q1":f"select MONTH, ATA_CODE, ATA_NAME, LOCATION, PUR from {source_db_details[master_key_pur]['db_table']}"
+              },
+        master_key_pur_training_data: {
+              "q1": f"select monthcode, ata, ata_desc, location, pur from {source_db_details[master_key_pur_training_data]['db_table']}"
+        },
+        master_key_raw_cr: {
+              "q1":f"""select OPERATOR_CODE, MONTH_CODE,DATE_OF_REMOVAL,  AC_REG_NUMBER, AIRPORT_CODE, PN_REMOVED, SN_REMOVED, 
+                                          PN_INSTALLED, SN_INSTALLED, REMOVAL_TYPE, ATA_CODE, PART_POSITION, REASON_FOR_REMOVAL, CORRECTIVE_ACTION, AC_TYPE, AC_MODEL, 
+                                          TSI, CSI, ATA_CHP, ATA_SEC, PART_DESCRIPTION from {source_db_details[master_key_raw_cr]['db_table']} 
+                                          where OPERATOR_CODE = '{source_db_details[master_key_raw_cr]['opr_code']}' and DATE_OF_REMOVAL IS NOT NULL"""
+                                          # and MONTH_CODE= '201503' 
+                                            #and AC_MODEL='{source_db_details['RAW_CR']['ac_model']}' 
+        },
+        master_key_pur_validation_data: {
+        "q1": f"""select ataCode,ataDesc,  updated_prediction_1, actual_prediction_1, 
+                                  updated_prediction_3, actual_prediction_3,
+                                  updated_prediction_6, actual_prediction_6, 
+                                  updated_prediction_12, actual_prediction_12
+                                  from {source_db_details[master_key_pur_validation_data]['db_table']} """
+        }
+              
+        }
+      master_mapping = {
+            master_key_pur: {
+                  "MONTH": "month_year",
+                  "ATA_CODE": "ata_code",
+                  "ATA_NAME": "ata_part_description",
+                  "LOCATION": "airport_code",
+                  "PUR": "part_unscheduled_removal",
+              },
+            master_key_pur_training_data: {
+                  "monthcode": "month_year",
+                  "ata": "ata_code",
+                  "ata_desc": "ata_part_description",
+                  "location": "airport_code",
+                  "pur": "part_unscheduled_removal",
+              },
+            master_key_raw_cr: {
+                  "operator_code": "operator_code",
+                  "month_code": "month_year",
+                  "date_of_removal": "removal_date",
+                  "ac_reg_number": "aircraft_registration_number",
+                  "airport_code": "airport_code",
+                  "pn_removed": "part_number_removed",
+                  "sn_removed": "serial_number_removed",
+                  "pn_installed": "part_number_installed",
+                  "sn_installed": "serial_number_installed",
+                  "removal_type": "removal_type",
+                  "ata_code": "ata_code",
+                  "part_position": "part_position",
+                  "reason_for_removal": "removal_reason",
+                  "corrective_action": "corrective_action",
+                  "ac_type": "aircraft_type",
+                  "ac_model": "aircraft_model",
+                  "tsi": "time_since_installed",
+                  "csi": "cycles_since_installed",
+                  "ata_chp": "ata_chapter_code",
+                  "ata_sec": "ata_section_code",
+                  "part_description": "ata_part_description",
+              },
+            master_key_pur_validation_data: {
+                "ataCode": "ata_code",
+                "ataDesc": "ata_part_description",
+                "updated_prediction_1": "predicted_value_last_1_months",
+                "actual_prediction_1": "actual_value_last_1_months",
+                "updated_prediction_3": "predicted_value_last_3_months",
+                "actual_prediction_3": "actual_value_last_3_months",
+                "updated_prediction_6": "predicted_value_last_6_months",
+                "actual_prediction_6": "actual_value_last_6_months",
+                "updated_prediction_12": "predicted_value_last_12_months",
+                "actual_prediction_12": "actual_value_last_12_months",     
+            }
+          }
+      mysql_to_solr_mapping = {
+        "batch_id": "batchId_l",
+        "cr_rec_id": "crRecId_l",
+        "data_type": "dataType_s",
+        "month_year": "monthYear_s",
+        "operator_code": "operatorCode_s",
+        "aircraft_type": "aircraftType_s",
+        "aircraft_model": "aircraftModel_s",
+        "airport_code": "airportCode_s",
+        "ata_code": "ataCode_s",
+        "ata_part_description": "ataPartDescription_txt",
+        "ata_chapter_code": "ataChapterCode_s",
+        "ata_section_code": "ataSectionCode_s",
+        "aircraft_registration_number": "aircraftRegistrationNumber_s",
+        "part_unscheduled_removal": "partUnscheduledRemoval_i",
+        "part_number_removed": "partNumberRemoved_s",
+        "serial_number_removed": "serialNumberRemoved_s",
+        "part_number_installed": "partNumberInstalled_s",
+        "serial_number_installed": "serialNumberInstalled_s",
+        "removal_type": "removalType_s",
+        "removal_date": "removalDate_dt",
+        "part_position": "partPosition_s",
+        "removal_reason": "removalReason_txt",
+        "corrective_action": "correctiveAction_txt",
+        "time_since_installed": "timeSinceInstalled_i",
+        "cycles_since_installed": "cyclesSinceInstalled_i",
+        "predicted_value_last_1_months": "predictedValueLast1Months_i",
+        "actual_value_last_1_months": "actualValueLast1Months_i",
+        "predicted_value_last_3_months": "predictedValueLast3Months_i",
+        "actual_value_last_3_months": "actualValueLast3Months_i",
+        "predicted_value_last_6_months": "predictedValueLast6Months_i",
+        "actual_value_last_6_months": "actualValueLast6Months_i",
+        "predicted_value_last_12_months": "predictedValueLast12Months_i",
+        "actual_value_last_12_months": "actualValueLast12Months_i",
+        "pur_chart_month_sequence": "purChartMonthSequence_i"
+      }
+
+
+      
+      def get_engine(db_details,dbtype):
+        engine = None
+        # logging.debug(f"{db_details} \n {dbtype}")
+        # print(f"{db_details} \n {dbtype}")
+        try:
+          #  Creates, Tests and Returns DB Engine 
+          if dbtype=='mysql':
+              DATABASE_URL = f"mysql+pymysql://{db_details['db_user']}:{db_details['db_password']}@{db_details['db_host']}:{db_details['db_port']}/{db_details['db_name']}"
+          elif dbtype=='mariadb':
+              # print(f"mariadb+mariadbconnector://{db_details['db_user']}:{db_details['db_password']}@{db_details['db_host']}:{db_details['db_port']}/{db_details['db_name']}")
+              DATABASE_URL = f"mysql+pymysql://{db_details['db_user']}:{db_details['db_password']}@{db_details['db_host']}:{db_details['db_port']}/{db_details['db_name']}"
+          elif dbtype=='oracle':
+              DATABASE_URL = f"oracle://{db_details['db_user']}:{db_details['db_password']}@{db_details['db_host']}:{db_details['db_port']}/{db_details['db_name']}"
+          engine = create_engine(DATABASE_URL, echo=False)
+          try:
+              runengine = engine.connect()
+              runengine.close()
+              logging.debug("Engine Connection Test Succeeded")
+              print("Engine Connection Test Succeeded")
+          except Exception:
+              if engine: engine.dispose()
+              logging.error(f"Error in creating DB Connection")
+              traceback.print_exc()   
+          return engine, True
+          
+        except Exception as e:
+          if engine: engine.dispose()
+          logging.error(f"Error in creating DB Connection")
+          print(f"Error in creating DB Connection")
+          traceback.print_exc()
+          return None, False
+      def q_get_db_data(query,engine):
+        try:
+          logging.info(f"Query: {query}")
+          print(f"Query: {query}")
+          with engine.connect() as conn:
+            get_data = conn.execute(text(query)).all()
+            db_data = pd.DataFrame(get_data)
+            return db_data, True
+        except:
+          if engine: engine.dispose()
+          logging.error(f"Error in creating DB Data Fetch")
+          traceback.print_exc()
+          return None, False
+      def q_execute_query(query,engine):
+        logging.info(f"Executing Query: {query}")
+        print(f"Executing Query: {query}")
+        try:
+            with engine.connect() as conn:
+              conn.execute(text(query))
+              return True
+        except:
+            if engine: engine.dispose()
+            logging.error(f"Error in executing query: {query}")
+            print(f"Error in executing query: {query}")
+            traceback.print_exc()
+            return False
+      def get_split_df_list(df, limit=100000):
+        if len(df) >=limit:
+          list_of_dfs = [df.loc[i:i+limit-1,:] for i in range(0, len(df),limit)]
+        else:
+          list_of_dfs = [df]
+        return list_of_dfs
+    
+      def q_insert_data(engine, dfdata, tablename): 
+        try:
+           with engine.connect() as conn:
+            try:
+                if type(dfdata) !=list:
+                    df_split = np.array_split(dfdata, 5)
+                else:
+                    df_split = dfdata
+                ind =1
+                for df in df_split:
+                    logging.debug(f"Inserting part {ind} of total {len(df_split)} DFs")
+                    print(f"Inserting part {ind} of total {len(df_split)} DFs")
+                    # df_sublist = get_split_df_list(df, limit=100000)
+                    # subind =1
+                    # for subdf in df_sublist:
+                    #     logging.debug(f"Inserting part {subind} of total {len(df_sublist)} Sub-DFs with length : {len(subdf)} of total length : {len(df)}")
+                    
+                    df.to_sql(name = tablename, con = conn, if_exists="append", index=False, chunksize=5000)  # , schema=db_schema_name
+                    # subind = subind+1
+                    ind = ind+1
+                conn.commit()
+                return True
+            except: 
+                conn.rollback()
+                conn.close()
+                if engine: engine.dispose()
+                logging.error(f"Error inserting DB Data")
+                print(f"Error inserting DB Data")
+                traceback.print_exc()
+                return False
+            
+        except:
+          if engine: engine.dispose()
+          logging.error(f"Error in inserting DB Data")
+          print(f"Error in inserting DB Data")
+          traceback.print_exc()
+          return False
+      def current_milli_time():
+        return round(time.time() * 1000)
+
+      def create_query_tuple(value):
+        try:
+            if len(value) > 1: finval = tuple(value)
+            else: finval = f"({value[0]})"
+            return finval, True
+        except Exception:
+            traceback.print_exc()
+            return None, False
+      def calculate_group_pur_others(group):
+        '''
+        Function to calculate the part_unscheduled_removal for a new row with airport_code called Other which the calc of (pur sum of 'OVERALL') - (pur sum of rest of the rows)
+        '''
+        try:
+            tmp_df = group[:1]
+            # print(tmp_df)
+            total_sum_excluding_overall = group[group['airport_code'] == 'OVERALL']['part_unscheduled_removal'].sum()
+            sum_non_overall = group[group['airport_code'] != 'OVERALL']['part_unscheduled_removal'].sum()
+            other_pur = total_sum_excluding_overall - sum_non_overall
+            
+            overall_mask = group['airport_code'] == 'OVERALL'
+            # print(overall_mask)
+            if overall_mask.any():
+                tmp_df['part_unscheduled_removal'] = other_pur
+                tmp_df['airport_code'] = 'Other'
+            group = pd.concat([group, tmp_df])
+            return group
+        except:
+            traceback.print_exc()
+            return group
+      def pur_others_calc(df):
+        return df.groupby(['month_year', 'ata_code'])[df.columns].apply(calculate_group_pur_others)
+
+      def fetch_source_data(master_mapping, fetch_queries, source_db_details,   run_data_type, start):
+        ''' Function to Fetch and Process Data that is ready to be Transferred to Destination DB Table
+        '''
+        engine = None
+        try:
+            #Create Engine for Run type
+            engine, engine_status = get_engine(db_details=source_db_details[run_data_type],dbtype=source_db_details[run_data_type]['dbtype'])
+            if not engine_status: return None, None, False
+
+            # Fetch Source DB Data
+            fetch_data, fetch_status = q_get_db_data(query=fetch_queries[run_data_type]['q1'],engine=engine)
+            if not fetch_status: return None, None, False
+            elapsed = (time.time() - start)
+            print(f"Time elapsed: {str(timedelta(seconds=elapsed))}.  fetch_data received with status {fetch_status} ")
+
+        
+            #Dispose Engine
+            engine.dispose()
+            elapsed = (time.time() - start)
+            print(f"Time elapsed: {str(timedelta(seconds=elapsed))}.  Engine Disposed. Starting DataFrame column renaming.")
+
+            
+            # Rename DF Columns to mapping
+            print(f"Time elapsed: {str(timedelta(seconds=elapsed))}.  Renaming started.")
+            fin_dest_db = fetch_data.copy()
+            fin_dest_db.rename(columns=master_mapping[run_data_type], inplace=True)
+            elapsed = (time.time() - start)
+            print(f"Time elapsed: {str(timedelta(seconds=elapsed))}.  Renaming complete. Starting simple transformations, if required ")
+            
+            # Add Extra Required Columns
+            batch_id = current_milli_time()
+            fin_dest_db['data_type'] = run_data_type
+            fin_dest_db['batch_id'] = batch_id
+            
+            if run_data_type!= master_key_raw_cr:
+                fin_dest_db['operator_code'] = opr_code
+                fin_dest_db['aircraft_model'] = ac_model
+            # if run_data_type == master_key_raw_cr :
+            #     fin_dest_db['removal_date'] = opr_code.dt.date
+
+            # Basic Preprocessing
+            fin_dest_db = fin_dest_db.replace({np.nan: None})
+            fin_dest_db = fin_dest_db.replace({'None': None})
+            
+            if run_data_type == master_key_pur:
+                fin_dest_db = pur_others_calc(fin_dest_db)
+            
+            elapsed = (time.time() - start)
+            print(f"Time elapsed: {str(timedelta(seconds=elapsed))}.  Simple transformations complete ")
+            return fin_dest_db,batch_id, True
+            
+        except:
+            if engine: engine.dispose()
+            print(f"Error in fetch_source_data function")
+            traceback.print_exc()
+            return None, None, False
+
+      # engine, engine_status = get_engine(db_details=source_db_details[master_key_pur],dbtype='mysql')
+      # fetch_data, fetch_status = q_get_db_data(query=fetch_queries[master_key_pur]['q1'],engine=engine)
+      # start = time.time()
+      # source_df, source_df_batch_id, source_df_status = fetch_source_data(master_mapping, fetch_queries, source_db_details,run_data_type[0], start)
+      def transfer_mariadb(mariadb_details, transfer_df, start, batch_id_list=None):
+        engine = None
+        try:
+            # MariaDB Dump and View 
+            engine, engine_status = get_engine(db_details=mariadb_details,dbtype='mariadb')
+            if not engine_status: return None, False
+            elapsed = (time.time() - start)
+            print(f"Time elapsed: {str(timedelta(seconds=elapsed))}. MariaDB Engine Created")
+            # DEV FOR NOW
+            # truncate_status = q_execute_query(query=f"Truncate table {mariadb_details['db_table']}",engine=engine)
+            # elapsed = (time.time() - start)
+            # logging.info(f"Time elapsed: {str(timedelta(seconds=elapsed))}. MariaDB Truncate Query Executed")
+            
+            dump_status = q_insert_data(engine=engine, dfdata=transfer_df, tablename=mariadb_details['db_table'])
+            if not dump_status: return None, False
+            elapsed = (time.time() - start)
+            print(f"Time elapsed: {str(timedelta(seconds=elapsed))}. MariaDB Insert status: {dump_status}")
+
+            tuplestring = ""
+            query_tuple, tuple_status = create_query_tuple(batch_id_list)
+            if query_tuple: tuplestring =f" where batch_id in {query_tuple} "
+            mariadb_data, fetch_status = q_get_db_data(query=f"select * from {mariadb_details['db_table']} {tuplestring}" ,engine=engine)
+            if not fetch_status: return None, False
+            elapsed = (time.time() - start)
+            print(f"Time elapsed: {str(timedelta(seconds=elapsed))}. MariaDB Data Fetch status: {fetch_status}")
+                
+            engine.dispose()
+            # print("MariaDB After Data Dump:")
+            # mariadb_data.head()
+            return mariadb_data, True
+        except:
+            if engine: engine.dispose()
+            print(f"Error in transfer_mariadb function")
+            traceback.print_exc()
+            return None, False
+
+
+
+      df_list = []
+      batch_id_list = []
+      start = time.time()
+      for run_data_type_one in run_data_type:
+          try:
+              elapsed = (time.time() - start)
+              print(f"Time elapsed: {str(timedelta(seconds=elapsed))}. Running Source Data Transfer for {run_data_type_one}")
+              source_df, source_df_batch_id, source_df_status = fetch_source_data(master_mapping, fetch_queries, source_db_details,run_data_type_one, start)
+              elapsed = (time.time() - start)
+              if not source_df_status: 
+                  print(f"Time elapsed: {str(timedelta(seconds=elapsed))}. Source Data Could not be Fetched. Skipping Run for  '{run_data_type_one}' Transfer")
+                  continue
+              print(
+                      f"Time elapsed: {str(timedelta(seconds=elapsed))}. Source Data Fetched for  '{run_data_type_one}' Transfer")
+              
+              elapsed = (time.time() - start)
+              batch_id_list.append(source_df_batch_id)
+              df_list.append(source_df)
+              # print(f"Time elapsed: {str(timedelta(seconds=elapsed))}.  {run_data_type_one} Batch Id : {source_df_batch_id},  Data Fetch Size: {len(source_df)}, Sample: {source_df.head(1)}")
+              
+              # concat_source_db = pd.concat([concat_source_db,source_df])
+              elapsed = (time.time() - start)
+              print(f"Time elapsed: {str(timedelta(seconds=elapsed))}.  {run_data_type_one} Batch Id : {source_df_batch_id}, Data Fetch Size: {len(source_df)}")
+          except:
+              elapsed = (time.time() - start)
+              print(f"Time elapsed: {str(timedelta(seconds=elapsed))}. Error processing transfer for '{run_data_type_one}'. ")
+              traceback.print_exc()
+              continue
+
+
+      if len(df_list)>0:
+          mariadb_df, mariadb_transfer_status = transfer_mariadb(mariadb_details = mariadb_details, transfer_df=df_list, start=start, batch_id_list=batch_id_list)
+      else:
+          elapsed = (time.time() - start)
+          print(f"Time elapsed: {str(timedelta(seconds=elapsed))}. No Data to transfer")
+
+      elapsed = (time.time() - start)
+      print(f"Time elapsed: {str(timedelta(seconds=elapsed))}. {run_data_type} process Complete for mariadb.")
+      
+      tmpdf = mariadb_df.copy()
+      if set(['created_at','updated_at','id','is_active']).issubset(tmpdf.columns):
+          tmpdf.drop(columns=["created_at", "updated_at", "id",'is_active'],inplace=True)
+
+      # fin_dest_db = fetch_data.copy()
+      tmpdf.rename(columns=mysql_to_solr_mapping, inplace=True)
+      tmpdf['source_s'] = 'reliability'
+
+      tmpdf = tmpdf.replace({np.nan: None})
+      tmpdf = tmpdf.replace({'None': None})
+      solr = pysolr.Solr('http://10.1.0.16:8983/solr/solr_test_1/', timeout=300, always_commit=True)
+      solr.add(tmpdf.to_dict('records'))
+      # print(len(mariadb_df))
+      print("successfully")
+
+  
+
+      

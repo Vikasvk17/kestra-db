@@ -1,0 +1,39 @@
+id: COMPONENT_REMOVAL_CENTRAL_FLOW
+namespace: rdss.component_removal
+
+tasks:
+  - id: basic_auth_api
+    type: io.kestra.plugin.scripts.python.Script
+    script: |
+      import requests
+      from requests.auth import HTTPBasicAuth
+
+      # List of URLs this list contains the api of all the run_data_type 
+      urls = [
+          "http://10.1.0.16:8080/api/v1/executions/rdss.component_removal/PUR_ETL_PIPELINE",
+          "http://10.1.0.16:8080/api/v1/executions/rdss.component_removal/PUR_TRAINING_INPUT_ETL_PIPELINE",
+          "http://10.1.0.16:8080/api/v1/executions/rdss.component_removal/RAW_CR_ETL_PIPELINE",
+          "http://10.1.0.16:8080/api/v1/executions/rdss.component_removal/PUR_VALIDATION_DATA_ETL_PIPELINE",
+
+
+      ]
+    
+      # List of operator it contain the different kind of operator for which we want to run our pipeline(url)
+      operators = ['JZA']
+
+      # Set up headers
+      headers = {
+          'Content-Type': 'multipart/form-data'
+      }
+
+      # Iterate over each URL
+      for url in urls:
+          # Iterate over each user and send the POST request
+          for operator in operators:
+              data = {
+                  'operator': operator
+              }
+              
+              response = requests.post(url, data=data, headers=headers)
+
+

@@ -1,0 +1,32 @@
+id: COMPONENT_REMOVAL_CENTRAL_FLOW_TRIGGER
+namespace: rdss.component_removal
+
+
+ 
+tasks:
+  - id: parallel-tasks
+    type: io.kestra.plugin.core.flow.Parallel
+    tasks:
+      - id: trigger-child-1
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: rdss.component_removal
+        flowId: PUR_ETL_PIPELINE
+        wait: true
+      - id: trigger-child-2
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: rdss.component_removal
+        flowId: PUR_TRAINING_INPUT_ETL_PIPELINE
+        wait: true
+      - id: trigger-child-3
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: rdss.component_removal
+        flowId: RAW_CR_ETL_PIPELINE
+        wait: true
+      - id: trigger-child-4
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: rdss.component_removal
+        flowId: PUR_VALIDATION_DATA_ETL_PIPELINE 
+        wait: true
+  - id: success-message
+    type: io.kestra.plugin.core.log.Log
+    message: "all child flows completed successfully!"
