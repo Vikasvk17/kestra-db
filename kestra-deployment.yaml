@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kestra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kestra
+  template:
+    metadata:
+      labels:
+        app: kestra
+    spec:
+      containers:
+        - name: kestra
+          image: 009160051923.dkr.ecr.us-east-2.amazonaws.com/kestra:latest  # Your ECR image
+          env:
+            - name: KESTRA_CONFIGURATION
+              value: |
+                datasources:
+                  postgres:
+                    url: jdbc:postgresql://postgres:5432/kestra
+                    driverClassName: org.postgresql.Driver
+                    username: kestra
+                    password: k3str4
+                kestra:
+                  server:
+                    basicAuth:
+                      enabled: false
+                      username: "admin@kestra.io"
+                      password: "kestra"
+                  repository:
+                    type: postgres
+                  storage:
+                    type: local
+                    local:
+                      basePath: "/app/storage"
+                  queue:
+                    type: postgres
+                  tasks:
+                    tmpDir:
+                      path: /tmp/kestra-wd/tmp
+                  url: http://localhost:8080/
+          ports:
+            - containerPort: 8080
+            - containerPort: 8081
+          volumeMounts:
+            - mountPath: /app/storage
+              name: kestra-storage
+      volumes:
+        - name: kestra-storage
+          persistentVolumeClaim:
+            claimName: kestra-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kestra
+spec:
+  selector:
+    app: kestra
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+    - name: grpc
+      protocol: TCP
+      port: 8081
+      targetPort: 8081
+  type: LoadBalancer
